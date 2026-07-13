@@ -1,0 +1,9 @@
+[package]
+name = "app-tray"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tray-icon = "0.13"
+image = "0.24"
+anyhow = "1.0"

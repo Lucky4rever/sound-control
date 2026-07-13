@@ -1,0 +1,140 @@
+import { Button, Slider, ScrollView } from "std-widgets.slint";
+
+export struct AppVolume {
+    name: string,
+    volume: int,
+    pid: int,
+    peak_level: int,
+    sound_type: string, // "none" | "voice" | "music"
+}
+
+export component AppWindow inherits Window {
+    in-out property <int> volume: 50;
+    in-out property <[AppVolume]> app_volumes: [];
+
+    callback volume_changed(int);
+    callback volume_step(int);
+    callback app_volume_changed(int, int);
+
+    no-frame: true;
+    always-on-top: true;
+    background: #1e1e24;
+
+    width: 320px;
+    height: 420px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        Text {
+            text: "Гучність системи: " + root.volume + "%";
+            horizontal-alignment: center;
+            font-size: 14px;
+            color: #ffffff;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: center;
+
+            Button {
+                text: "-";
+                width: 30px;
+                clicked => { root.volume_step(-5); }
+            }
+
+            Slider {
+                width: 180px;
+                minimum: 0;
+                maximum: 100;
+                value: root.volume;
+                changed(val) => { root.volume_changed(floor(val)); }
+            }
+
+            Button {
+                text: "+";
+                width: 30px;
+                clicked => { root.volume_step(5); }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: #3a3a44;
+        }
+
+        Text {
+            text: "Мікшер додатків";
+            horizontal-alignment: center;
+            font-size: 13px;
+            color: #a0a0b0;
+        }
+
+        ScrollView {
+            height: 260px;
+            VerticalLayout {
+                x: 0;
+                width: parent.width;
+                spacing: 6px;
+                for app in root.app_volumes: Rectangle {
+                    height: 72px;
+                    background: app.sound_type == "voice" ? #2a352a : #2a2a35;
+                    border-radius: 6px;
+                    border-width: app.sound_type == "voice" ? 1px : 0px;
+                    border-color: #33cc66;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 4px;
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: stretch;
+
+                            Text {
+                                text: app.name;
+                                color: #ffffff;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                width: 100px;
+                                overflow: TextOverflow.elide;
+                            }
+
+                            Slider {
+                                minimum: 0;
+                                maximum: 100;
+                                value: app.volume;
+                                changed(val) => { root.app_volume_changed(app.pid, floor(val)); }
+                            }
+                        }
+
+                        // Піковий індикатор
+                        Rectangle {
+                            height: 4px;
+                            border-radius: 2px;
+                            background: #1a1a22;
+
+                            Rectangle {
+                                x: 0;
+                                width: app.peak_level * 1px;
+                                height: 4px;
+                                border-radius: 2px;
+                                background: app.peak_level > 80 ? #ff5555 : (app.peak_level > 50 ? #ffaa33 : #33cc66);
+                            }
+                        }
+
+                        // Індикатор типу звуку
+                        Text {
+                            text: app.sound_type == "voice" ? "🎤 voice" :
+                                  app.sound_type == "music" ? "🎵 music" : "🔇 none";
+                            color: app.sound_type == "voice" ? #33cc66 :
+                                   app.sound_type == "music" ? #ffaa33 : #666666;
+                            font-size: 10px;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

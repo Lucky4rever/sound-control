@@ -1,0 +1,8 @@
+/target
+/results
+/audio_files
+
+*.log
+*.ipynb
+
+*.lock
