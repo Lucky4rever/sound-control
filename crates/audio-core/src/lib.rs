@@ -1,3 +1,17 @@
+pub mod sound_mode;
+pub mod settings;
+pub mod volume_envelope;
+pub mod priority_ducker;
+pub mod constants;
+pub mod activity_tracker;
+
+pub use sound_mode::SoundMode;
+pub use settings::{Settings, AppConfig};
+pub use priority_ducker::{PriorityDucker, effective_priority};
+pub use volume_envelope::VolumeEnvelope;
+pub use activity_tracker::ActivityTracker;
+pub use constants::{RECOVERY_MS, ACTIVE_PEAK_THRESHOLD, GAIN_COEFFICIENT};
+
 #[cfg(target_os = "windows")]
 use windows::{
     Win32::Media::Audio::{
@@ -24,6 +38,7 @@ pub enum SoundType {
     None,
     Voice,
     Music,
+    Noise,
 }
 
 impl SoundType {
@@ -32,6 +47,7 @@ impl SoundType {
             SoundType::None => "none",
             SoundType::Voice => "voice",
             SoundType::Music => "music",
+            SoundType::Noise => "noise",
         }
     }
 }
@@ -76,13 +92,14 @@ impl SoundTypeBuffer {
         if self.buffer.is_empty() {
             return SoundType::None;
         }
-        // Якщо хоч раз був голос — весь період = голос
         if self.buffer.iter().any(|&t| t == SoundType::Voice) {
             return SoundType::Voice;
         }
-        // Якщо хоч раз була музика — музика
         if self.buffer.iter().any(|&t| t == SoundType::Music) {
             return SoundType::Music;
+        }
+        if self.buffer.iter().any(|&t| t == SoundType::Noise) {
+            return SoundType::Noise;
         }
         SoundType::None
     }
@@ -180,10 +197,12 @@ impl AmplitudeBuffer {
 pub struct AppSession {
     pub pid: u32,
     pub name: String,
-    pub volume: i32,
+    pub volume: i32,           // бажана користувачем (з UI)
+    pub effective_volume: i32, // реальна після ducking
     pub is_muted: bool,
     pub peak_level: i32,
     pub sound_type: SoundType,
+    pub sound_mode: SoundMode,
 }
 
 pub struct AudioController;
@@ -265,33 +284,31 @@ impl AudioController {
     fn classify_tick(amp_buffer: &AmplitudeBuffer) -> SoundType {
         let mean_amp = amp_buffer.mean();
 
-        // Тиша: дуже тихий сигнал
         if mean_amp < 0.003 {
             return SoundType::None;
         }
 
         if amp_buffer.len() < 3 {
-            // Недостатньо даних — вважаємо тишею
             return SoundType::None;
         }
 
         let corr = amp_buffer.correlation();
         let std_amp = amp_buffer.std();
 
-        // Дуже тихий стабільний сигнал
+        // Шум: амплітуда стабільна (мала дисперсія), але сигнал є
+        if std_amp < crate::constants::NOISE_STD_THRESHOLD && mean_amp > 0.003 {
+            return SoundType::Noise;
+        }
+
         if mean_amp < 0.01 && std_amp < 0.003 {
             return SoundType::None;
         }
 
-        // Класифікація за кореляцією
         if corr > 0.5 {
-            // Висока кореляція = узгоджені зміни = музика
             SoundType::Music
         } else if corr < 0.25 {
-            // Низька кореляція = хаотичні зміни = голос
             SoundType::Voice
         } else {
-            // Середня кореляція — дивимось на стабільність
             if std_amp < mean_amp * 0.25 {
                 SoundType::Music
             } else {
@@ -304,6 +321,7 @@ impl AudioController {
     pub fn get_app_sessions(
         amp_histories: &mut std::collections::HashMap<u32, AmplitudeBuffer>,
         type_buffers: &mut std::collections::HashMap<u32, SoundTypeBuffer>,
+        activity_tracker: &mut crate::activity_tracker::ActivityTracker,
     ) -> Vec<AppSession> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -342,6 +360,10 @@ impl AudioController {
                     Err(_) => continue,
                 };
 
+                if pid == std::process::id() {
+                    continue;
+                }
+
                 let simple_volume: ISimpleAudioVolume = match session_control.cast() {
                     Ok(sv) => sv,
                     Err(_) => continue,
@@ -362,9 +384,14 @@ impl AudioController {
                         Ok(m) => m,
                         Err(_) => {
                             sessions.push(AppSession {
-                                pid, name: Self::get_process_name(pid),
-                                volume: vol_scalar, is_muted,
-                                peak_level: 0, sound_type: SoundType::None,
+                                pid,
+                                name: Self::get_process_name(pid),
+                                volume: vol_scalar,
+                                effective_volume: vol_scalar,
+                                is_muted,
+                                peak_level: 0,
+                                sound_type: SoundType::None,
+                                sound_mode: SoundMode::Auto,
                             });
                             continue;
                         }
@@ -375,6 +402,10 @@ impl AudioController {
                     };
 
                     let peak_percent = (peak * 100.0).round() as i32;
+
+                    if !activity_tracker.is_active(pid, peak_percent, ACTIVE_PEAK_THRESHOLD) {
+                        continue;
+                    }
 
                     // Оновлюємо буфер амплітуд (для аналізу в рамках тіку)
                     let amp_buf = amp_histories.entry(pid).or_insert_with(|| AmplitudeBuffer::new(5));
@@ -399,7 +430,14 @@ impl AudioController {
                 }
 
                 sessions.push(AppSession {
-                    pid, name, volume: vol_scalar, is_muted, peak_level, sound_type,
+                    pid,
+                    name,
+                    volume: vol_scalar,
+                    effective_volume: vol_scalar,
+                    is_muted,
+                    peak_level,
+                    sound_type,
+                    sound_mode: SoundMode::Auto,
                 });
             }
 
@@ -407,6 +445,7 @@ impl AudioController {
             let active_pids: std::collections::HashSet<u32> = sessions.iter().map(|s| s.pid).collect();
             amp_histories.retain(|pid, _| active_pids.contains(pid));
             type_buffers.retain(|pid, _| active_pids.contains(pid));
+            activity_tracker.cleanup(&active_pids);
 
             sessions
         }

@@ -1,11 +1,13 @@
-import { Button, Slider, ScrollView } from "std-widgets.slint";
+import { Button, Slider, ScrollView, ComboBox } from "std-widgets.slint";
 
 export struct AppVolume {
     name: string,
     volume: int,
     pid: int,
     peak_level: int,
-    sound_type: string, // "none" | "voice" | "music"
+    sound_type: string,
+    sound_mode: string,
+    priority: int,
 }
 
 export component AppWindow inherits Window {
@@ -15,20 +17,21 @@ export component AppWindow inherits Window {
     callback volume_changed(int);
     callback volume_step(int);
     callback app_volume_changed(int, int);
+    callback app_mode_changed(int, int);
 
     no-frame: true;
     always-on-top: true;
     background: #1e1e24;
 
-    width: 320px;
-    height: 420px;
+    width: 360px;
+    height: 440px;
 
     VerticalLayout {
         padding: 16px;
         spacing: 12px;
 
         Text {
-            text: "Гучність системи: " + root.volume + "%";
+            text: "System Volume: " + root.volume + "%";
             horizontal-alignment: center;
             font-size: 14px;
             color: #ffffff;
@@ -65,7 +68,7 @@ export component AppWindow inherits Window {
         }
 
         Text {
-            text: "Мікшер додатків";
+            text: "Application Mixer";
             horizontal-alignment: center;
             font-size: 13px;
             color: #a0a0b0;
@@ -78,10 +81,12 @@ export component AppWindow inherits Window {
                 width: parent.width;
                 spacing: 6px;
                 for app in root.app_volumes: Rectangle {
-                    height: 72px;
-                    background: app.sound_type == "voice" ? #2a352a : #2a2a35;
+                    height: 84px;
+                    background: app.sound_mode == "voice" ? #2a352a :
+                                app.sound_mode == "other" ? #15151a :
+                                #2a2a35;
                     border-radius: 6px;
-                    border-width: app.sound_type == "voice" ? 1px : 0px;
+                    border-width: app.sound_mode == "voice" ? 1px : 0px;
                     border-color: #33cc66;
 
                     VerticalLayout {
@@ -97,19 +102,30 @@ export component AppWindow inherits Window {
                                 color: #ffffff;
                                 font-size: 12px;
                                 vertical-alignment: center;
-                                width: 100px;
+                                width: 80px;
                                 overflow: TextOverflow.elide;
+                            }
+
+                            ComboBox {
+                                width: 110px;
+                                model: ["auto", "voice", "music", "other"];
+                                current-index: app.sound_mode == "auto" ? 0 :
+                                             app.sound_mode == "voice" ? 1 :
+                                             app.sound_mode == "music" ? 2 : 3;
+                                selected(value) => {
+                                    root.app_mode_changed(app.pid, value == "auto" ? 0 : value == "voice" ? 1 : value == "music" ? 2 : 3);
+                                }
                             }
 
                             Slider {
                                 minimum: 0;
                                 maximum: 100;
                                 value: app.volume;
+                                enabled: app.sound_mode != "other";
                                 changed(val) => { root.app_volume_changed(app.pid, floor(val)); }
                             }
                         }
 
-                        // Піковий індикатор
                         Rectangle {
                             height: 4px;
                             border-radius: 2px;
@@ -120,21 +136,32 @@ export component AppWindow inherits Window {
                                 width: app.peak_level * 1px;
                                 height: 4px;
                                 border-radius: 2px;
-                                background: app.peak_level > 80 ? #ff5555 : (app.peak_level > 50 ? #ffaa33 : #33cc66);
+                                background: app.peak_level > 80 ? #ff5555 :
+                                            app.peak_level > 50 ? #ffaa33 : #33cc66;
                             }
                         }
 
-                        // Індикатор типу звуку
                         Text {
-                            text: app.sound_type == "voice" ? "🎤 voice" :
-                                  app.sound_type == "music" ? "🎵 music" : "🔇 none";
+                            text: (app.sound_type == "voice" ? "🎤 voice" :
+                                   app.sound_type == "music" ? "🎵 music" :
+                                   app.sound_type == "noise" ? "💨 noise" : "🔇 none")
+                                  + " | P:" + app.priority;
                             color: app.sound_type == "voice" ? #33cc66 :
-                                   app.sound_type == "music" ? #ffaa33 : #666666;
+                                   app.sound_type == "music" ? #ffaa33 :
+                                   app.sound_type == "noise" ? #888888 : #666666;
                             font-size: 10px;
                         }
                     }
                 }
             }
+        }
+
+        // --- Підпис про захист від копірайту ---
+        Text {
+            text: "© 2026 Sound Control. All rights reserved.";
+            horizontal-alignment: center;
+            font-size: 9px;
+            color: #555560;
         }
     }
 }

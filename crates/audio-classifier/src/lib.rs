@@ -31,7 +31,7 @@ impl AudioClassifier {
 
         #[cfg(target_os = "windows")]
         thread::spawn(move || {
-            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok(); }
+            unsafe { let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok(); }
 
             let enumerator: IMMDeviceEnumerator = unsafe {
                 match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
