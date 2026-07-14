@@ -1,0 +1,29 @@
+[alias]
+# Локальні білди (нативна платформа)
+br = "build --release"
+brw = "build --release --target x86_64-pc-windows-msvc"
+brl = "build --release --target x86_64-unknown-linux-gnu"
+brm = "build --release --target x86_64-apple-darwin"
+brma = "build --release --target aarch64-apple-darwin"
+
+# Запуск
+r = "run -p sound-control"
+rr = "run -p sound-control --release"
+
+# Тести
+t = "test --workspace"
+tr = "test --workspace --release"
+
+# Крос-платформні білди (потребують встановлених target-ів)
+cross-linux = "build --release --target x86_64-unknown-linux-gnu"
+cross-mac = "build --release --target x86_64-apple-darwin"
+cross-mac-arm = "build --release --target aarch64-apple-darwin"
+
+# Очистка + повний ребілд
+rebuild = "clean && build --release"
+
+# Форматування + чеки
+f = "fmt --all"
+c = "check --workspace"
+cl = "clippy --workspace --all-targets --all-features"
+fix = "clippy --workspace --all-targets --all-features --fix --allow-dirty"

@@ -4,34 +4,25 @@ pub mod volume_envelope;
 pub mod priority_ducker;
 pub mod constants;
 pub mod activity_tracker;
+pub mod platform;
 
 pub use sound_mode::SoundMode;
 pub use settings::{Settings, AppConfig};
 pub use priority_ducker::{PriorityDucker, effective_priority};
 pub use volume_envelope::VolumeEnvelope;
 pub use activity_tracker::ActivityTracker;
-pub use constants::{RECOVERY_MS, ACTIVE_PEAK_THRESHOLD, GAIN_COEFFICIENT};
 
 #[cfg(target_os = "windows")]
-use windows::{
-    Win32::Media::Audio::{
-        IAudioSessionManager2, IAudioSessionEnumerator, IAudioSessionControl,
-        IAudioSessionControl2, ISimpleAudioVolume,
-        IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender,
-    },
-    Win32::Media::Audio::Endpoints::IAudioMeterInformation,
-    Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, CLSCTX_ALL, CoCreateInstance},
-    Win32::System::ProcessStatus::GetModuleBaseNameW,
-    Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
-    Win32::Foundation::CloseHandle,
-};
-#[cfg(target_os = "windows")]
-use windows::core::Interface;
+pub use platform::windows::AudioController;
+#[cfg(target_os = "linux")]
+pub use platform::linux::AudioController;
+#[cfg(target_os = "macos")]
+pub use platform::macos::AudioController;
 
 use std::collections::VecDeque;
 
-const TICK_MS: u32 = 200;      // інтервал оновлення (мс)
-const PERIOD_MS: u32 = 1000;   // період аналізу (мс)
+pub const TICK_MS: u32 = 200;
+pub const PERIOD_MS: u32 = 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SoundType {
@@ -52,12 +43,21 @@ impl SoundType {
     }
 }
 
-/// Динамічний вектор типів звуку за період.
-/// При кожному тіку: прибираємо першу комірку, додаємо нову останню.
-/// Якщо в періоді був хоч раз Voice — весь період = Voice (пріоритет голосу).
+#[derive(Debug, Clone)]
+pub struct AppSession {
+    pub pid: u32,
+    pub name: String,
+    pub volume: i32,
+    pub effective_volume: i32,
+    pub is_muted: bool,
+    pub peak_level: i32,
+    pub sound_type: SoundType,
+    pub sound_mode: SoundMode,
+}
+
 pub struct SoundTypeBuffer {
     buffer: VecDeque<SoundType>,
-    capacity: usize, // кількість тіків у періоді
+    capacity: usize,
     period_ms: u32,
 }
 
@@ -86,8 +86,6 @@ impl SoundTypeBuffer {
         self.buffer.len() >= self.capacity
     }
 
-    /// Повертає результуючий тип за період.
-    /// Пріоритет: Voice > Music > None
     pub fn resolve(&self) -> SoundType {
         if self.buffer.is_empty() {
             return SoundType::None;
@@ -112,14 +110,12 @@ impl SoundTypeBuffer {
         self.period_ms = period_ms;
         let new_capacity = (period_ms / tick_ms).max(1) as usize;
         self.capacity = new_capacity;
-        // Обрізаємо зайві з початку, якщо новий розмір менший
         while self.buffer.len() > self.capacity {
             self.buffer.pop_front();
         }
     }
 }
 
-/// Буфер амплітуд для аналізу кореляції в рамках одного тіку
 pub struct AmplitudeBuffer {
     buffer: VecDeque<f32>,
     capacity: usize,
@@ -144,7 +140,6 @@ impl AmplitudeBuffer {
         self.buffer.push_back(value);
     }
 
-    /// Коефіцієнт кореляції між сусідніми змінами амплітуд
     pub fn correlation(&self) -> f32 {
         let vals: Vec<f32> = self.buffer.iter().cloned().collect();
         if vals.len() < 4 {
@@ -193,315 +188,37 @@ impl AmplitudeBuffer {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AppSession {
-    pub pid: u32,
-    pub name: String,
-    pub volume: i32,           // бажана користувачем (з UI)
-    pub effective_volume: i32, // реальна після ducking
-    pub is_muted: bool,
-    pub peak_level: i32,
-    pub sound_type: SoundType,
-    pub sound_mode: SoundMode,
-}
+pub fn classify_tick(amp_buffer: &AmplitudeBuffer) -> SoundType {
+    let mean_amp = amp_buffer.mean();
 
-pub struct AudioController;
-
-impl AudioController {
-    #[cfg(target_os = "windows")]
-    fn get_volume_interface() -> Option<windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume> {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
-            let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
-            let volume: windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None).ok()?;
-            Some(volume)
-        }
+    if mean_amp < 0.003 {
+        return SoundType::None;
     }
 
-    pub fn get_current_volume() -> i32 {
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(volume_api) = Self::get_volume_interface() {
-                unsafe {
-                    if let Ok(vol) = volume_api.GetMasterVolumeLevelScalar() {
-                        return (vol * 100.0f32).round() as i32;
-                    }
-                }
-            }
-        }
-        50
+    if amp_buffer.len() < 3 {
+        return SoundType::None;
     }
 
-    pub fn set_volume(volume: i32) {
-        let clamped = volume.clamp(0, 100);
-        let scalar = clamped as f32 / 100.0;
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(volume_api) = Self::get_volume_interface() {
-                unsafe {
-                    let _ = volume_api.SetMasterVolumeLevelScalar(scalar, std::ptr::null());
-                }
-            }
-        }
-        #[cfg(target_os = "linux")]
-        {
-            std::process::Command::new("amixer")
-                .args(&["-D", "pulse", "sset", "Master", &format!("{}%", clamped)])
-                .spawn()
-                .ok();
-        }
+    let corr = amp_buffer.correlation();
+    let std_amp = amp_buffer.std();
+
+    if std_amp < constants::NOISE_STD_THRESHOLD && mean_amp > 0.003 {
+        return SoundType::Noise;
     }
 
-    #[cfg(target_os = "windows")]
-    fn get_device() -> Option<windows::Win32::Media::Audio::IMMDevice> {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
-            let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
-            Some(device)
-        }
+    if mean_amp < 0.01 && std_amp < 0.003 {
+        return SoundType::None;
     }
 
-    #[cfg(target_os = "windows")]
-    fn get_process_name(pid: u32) -> String {
-        unsafe {
-            let h_process = match OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) {
-                Ok(h) => h,
-                Err(_) => return format!("PID {}", pid),
-            };
-            let mut buf = [0u16; 260];
-            let len = GetModuleBaseNameW(h_process, None, &mut buf);
-            let _ = CloseHandle(h_process);
-            if len == 0 {
-                return format!("PID {}", pid);
-            }
-            String::from_utf16_lossy(&buf[..len as usize])
-        }
-    }
-
-    /// Класифікація звуку на основі кореляції амплітуд у рамках одного тіку
-    fn classify_tick(amp_buffer: &AmplitudeBuffer) -> SoundType {
-        let mean_amp = amp_buffer.mean();
-
-        if mean_amp < 0.003 {
-            return SoundType::None;
-        }
-
-        if amp_buffer.len() < 3 {
-            return SoundType::None;
-        }
-
-        let corr = amp_buffer.correlation();
-        let std_amp = amp_buffer.std();
-
-        // Шум: амплітуда стабільна (мала дисперсія), але сигнал є
-        if std_amp < crate::constants::NOISE_STD_THRESHOLD && mean_amp > 0.003 {
-            return SoundType::Noise;
-        }
-
-        if mean_amp < 0.01 && std_amp < 0.003 {
-            return SoundType::None;
-        }
-
-        if corr > 0.5 {
+    if corr > 0.5 {
+        SoundType::Music
+    } else if corr < 0.25 {
+        SoundType::Voice
+    } else {
+        if std_amp < mean_amp * 0.25 {
             SoundType::Music
-        } else if corr < 0.25 {
-            SoundType::Voice
         } else {
-            if std_amp < mean_amp * 0.25 {
-                SoundType::Music
-            } else {
-                SoundType::Voice
-            }
+            SoundType::Voice
         }
     }
-
-    #[cfg(target_os = "windows")]
-    pub fn get_app_sessions(
-        amp_histories: &mut std::collections::HashMap<u32, AmplitudeBuffer>,
-        type_buffers: &mut std::collections::HashMap<u32, SoundTypeBuffer>,
-        activity_tracker: &mut crate::activity_tracker::ActivityTracker,
-    ) -> Vec<AppSession> {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let Some(device) = Self::get_device() else { return vec![] };
-
-            let session_manager: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) {
-                Ok(sm) => sm,
-                Err(_) => return vec![],
-            };
-
-            let enumerator: IAudioSessionEnumerator = match session_manager.GetSessionEnumerator() {
-                Ok(e) => e,
-                Err(_) => return vec![],
-            };
-
-            let count = match enumerator.GetCount() {
-                Ok(c) => c,
-                Err(_) => return vec![],
-            };
-
-            let mut sessions = Vec::new();
-
-            for i in 0..count {
-                let session_control: IAudioSessionControl = match enumerator.GetSession(i) {
-                    Ok(sc) => sc,
-                    Err(_) => continue,
-                };
-
-                let session_control2: IAudioSessionControl2 = match session_control.cast() {
-                    Ok(sc2) => sc2,
-                    Err(_) => continue,
-                };
-
-                let pid = match session_control2.GetProcessId() {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
-
-                if pid == std::process::id() {
-                    continue;
-                }
-
-                let simple_volume: ISimpleAudioVolume = match session_control.cast() {
-                    Ok(sv) => sv,
-                    Err(_) => continue,
-                };
-
-                let vol_scalar = match simple_volume.GetMasterVolume() {
-                    Ok(v) => (v * 100.0).round() as i32,
-                    Err(_) => continue,
-                };
-
-                let is_muted = match simple_volume.GetMute() {
-                    Ok(m) => m.as_bool(),
-                    Err(_) => false,
-                };
-
-                let (peak_level, sound_type) = {
-                    let meter: IAudioMeterInformation = match session_control.cast() {
-                        Ok(m) => m,
-                        Err(_) => {
-                            sessions.push(AppSession {
-                                pid,
-                                name: Self::get_process_name(pid),
-                                volume: vol_scalar,
-                                effective_volume: vol_scalar,
-                                is_muted,
-                                peak_level: 0,
-                                sound_type: SoundType::None,
-                                sound_mode: SoundMode::Auto,
-                            });
-                            continue;
-                        }
-                    };
-                    let peak = match meter.GetPeakValue() {
-                        Ok(v) => v,
-                        Err(_) => 0.0,
-                    };
-
-                    let peak_percent = (peak * 100.0).round() as i32;
-
-                    if !activity_tracker.is_active(pid, peak_percent, ACTIVE_PEAK_THRESHOLD) {
-                        continue;
-                    }
-
-                    // Оновлюємо буфер амплітуд (для аналізу в рамках тіку)
-                    let amp_buf = amp_histories.entry(pid).or_insert_with(|| AmplitudeBuffer::new(5));
-                    amp_buf.push(peak);
-
-                    // Класифікуємо поточний тік
-                    let tick_type = Self::classify_tick(amp_buf);
-
-                    // Оновлюємо періодний буфер (для згладжування)
-                    let type_buf = type_buffers.entry(pid).or_insert_with(|| SoundTypeBuffer::new(PERIOD_MS, TICK_MS));
-                    type_buf.push(tick_type);
-
-                    // Результуючий тип за період
-                    let resolved_type = type_buf.resolve();
-
-                    (peak_percent, resolved_type)
-                };
-
-                let name = Self::get_process_name(pid);
-                if name.is_empty() || name == "PID 0" {
-                    continue;
-                }
-
-                sessions.push(AppSession {
-                    pid,
-                    name,
-                    volume: vol_scalar,
-                    effective_volume: vol_scalar,
-                    is_muted,
-                    peak_level,
-                    sound_type,
-                    sound_mode: SoundMode::Auto,
-                });
-            }
-
-            // Очищаємо історії для неактивних PID
-            let active_pids: std::collections::HashSet<u32> = sessions.iter().map(|s| s.pid).collect();
-            amp_histories.retain(|pid, _| active_pids.contains(pid));
-            type_buffers.retain(|pid, _| active_pids.contains(pid));
-            activity_tracker.cleanup(&active_pids);
-
-            sessions
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    pub fn set_app_volume(pid: u32, volume: i32) {
-        let clamped = volume.clamp(0, 100);
-        let scalar = clamped as f32 / 100.0;
-        unsafe {
-            let Some(device) = Self::get_device() else { return };
-            let session_manager: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) {
-                Ok(sm) => sm,
-                Err(_) => return,
-            };
-            let enumerator: IAudioSessionEnumerator = match session_manager.GetSessionEnumerator() {
-                Ok(e) => e,
-                Err(_) => return,
-            };
-            let count = match enumerator.GetCount() {
-                Ok(c) => c,
-                Err(_) => return,
-            };
-
-            for i in 0..count {
-                let session_control: IAudioSessionControl = match enumerator.GetSession(i) {
-                    Ok(sc) => sc,
-                    Err(_) => continue,
-                };
-                let session_control2: IAudioSessionControl2 = match session_control.cast() {
-                    Ok(sc2) => sc2,
-                    Err(_) => continue,
-                };
-                let session_pid = match session_control2.GetProcessId() {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
-
-                if session_pid == pid {
-                    let simple_volume: ISimpleAudioVolume = match session_control.cast() {
-                        Ok(sv) => sv,
-                        Err(_) => continue,
-                    };
-                    let _ = simple_volume.SetMasterVolume(scalar, std::ptr::null());
-                    break;
-                }
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    pub fn get_app_sessions(
-        _amp_histories: &mut std::collections::HashMap<u32, AmplitudeBuffer>,
-        _type_buffers: &mut std::collections::HashMap<u32, SoundTypeBuffer>,
-    ) -> Vec<AppSession> { vec![] }
-
-    #[cfg(not(target_os = "windows"))]
-    pub fn set_app_volume(_pid: u32, _volume: i32) {}
 }
