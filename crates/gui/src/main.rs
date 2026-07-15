@@ -49,10 +49,23 @@ impl Drop for AppState {
     }
 }
 
+fn get_assets_dir() -> std::path::PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let assets = exe_dir.join("assets");
+            if assets.exists() {
+                return assets;
+            }
+        }
+    }
+
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let icon_path = manifest.join("../../assets/icon.png");
-    let model_path = manifest.join("../../assets/model.onnx");
+    let assets_dir = get_assets_dir();
+    let icon_path = assets_dir.join("icon.png");
+    let model_path = assets_dir.join("model.onnx");
 
     let _tray = SystemTray::init(&icon_path)?;
     let ui = AppWindow::new()?;
