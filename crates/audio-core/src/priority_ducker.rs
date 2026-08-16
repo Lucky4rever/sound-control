@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::time::Instant;
 use crate::{AppSession, SoundType, SoundMode, Settings};
 use crate::volume_envelope::VolumeEnvelope;
-use crate::constants::{RECOVERY_MS, GAIN_COEFFICIENT};
 
 #[derive(Debug)]
 struct DuckState {
@@ -34,8 +33,6 @@ impl PriorityDucker {
             return targets;
         }
 
-        // Голос вважається активним, якщо класифікований як Voice (або вручну встановлено)
-        // і видає будь-який звук (peak_level > 0). При 1% гучності вікна це може бути 1–2%.
         let voice_info = indexed.iter().find(|(idx, _)| {
             let s = &sessions[*idx];
             (s.sound_type == SoundType::Voice || s.sound_mode == SoundMode::Voice) && s.peak_level > 0
@@ -56,15 +53,17 @@ impl PriorityDucker {
                 .unwrap_or(session.volume.clamp(0, 100) as f32 / 100.0);
 
             let st = self.states.entry(pid).or_insert_with(|| DuckState {
-                envelope: VolumeEnvelope::new(8),
+                envelope: VolumeEnvelope::new(8, settings),
                 last_duck: Instant::now(),
                 is_ducked: false,
             });
 
+            // Оновлюємо параметри envelope якщо налаштування змінились
+            st.envelope.update_rates(settings);
+
             let target_ratio: f32;
 
             if rank == 0 {
-                // Найвищий пріоритет — 100% від бажаної гучності
                 target_ratio = 1.0;
             } else if voice_active {
                 st.is_ducked = true;
@@ -74,17 +73,15 @@ impl PriorityDucker {
                 let v_vol = voice_vol as f32;
                 let v_peak = voice_peak as f32;
 
-                // V_music = V_voice * peak_voice / peak_music * 0.25
-                let raw_percent = v_vol * v_peak / self_peak * GAIN_COEFFICIENT;
+                let raw_percent = v_vol * v_peak / self_peak * settings.runtime.gain_coefficient_f32();
                 target_ratio = (raw_percent / 100.0).clamp(0.0, 1.0);
             } else {
-                // Відновлення: плавно повертаємось до 100% від поточного ducking-рівня
-                if st.last_duck.elapsed().as_millis() > RECOVERY_MS {
+                if st.last_duck.elapsed().as_millis() > settings.runtime.recovery_ms_u128() {
                     st.is_ducked = false;
                     target_ratio = 1.0;
                 } else {
                     let current = st.envelope.current();
-                    let t = (st.last_duck.elapsed().as_millis() as f32 / RECOVERY_MS as f32).min(1.0);
+                    let t = (st.last_duck.elapsed().as_millis() as f32 / settings.runtime.recovery_ms_u128() as f32).min(1.0);
                     target_ratio = current + (1.0 - current) * t;
                 }
             }

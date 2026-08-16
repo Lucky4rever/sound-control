@@ -57,6 +57,7 @@ impl AudioController {
         _amp_histories: &mut HashMap<u32, AmplitudeBuffer>,
         _type_buffers: &mut HashMap<u32, SoundTypeBuffer>,
         _activity_tracker: &mut ActivityTracker,
+        _settings: &Settings,
     ) -> Vec<AppSession> {
         // TODO: PipeWire/PulseAudio per-app sessions not yet implemented
         vec![]

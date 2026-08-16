@@ -4,15 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+audio-core = { path = "../audio-core" }
+rustfft = "6.2"
 tract-onnx = "0.21"
 ndarray = "0.15"
-rustfft = "6.2"
 anyhow = "1.0"
 
-[target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.58"
-features = [
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.52", features = [
     "Win32_Media_Audio",
     "Win32_System_Com",
+    "Win32_Media_Audio_Endpoints",
     "Win32_Foundation",
-]
+] }

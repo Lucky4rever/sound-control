@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use crate::constants::{ENVELOPE_ATTACK, ENVELOPE_RELEASE};
+use crate::settings::Settings;
 
 #[derive(Debug)]
 pub struct VolumeEnvelope {
@@ -11,14 +11,19 @@ pub struct VolumeEnvelope {
 }
 
 impl VolumeEnvelope {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, settings: &Settings) -> Self {
         Self {
             history: VecDeque::with_capacity(capacity),
             capacity,
             current: 1.0,
-            attack: ENVELOPE_ATTACK,
-            release: ENVELOPE_RELEASE,
+            attack: settings.runtime.envelope_attack_f32(),
+            release: settings.runtime.envelope_release_f32(),
         }
+    }
+
+    pub fn update_rates(&mut self, settings: &Settings) {
+        self.attack = settings.runtime.envelope_attack_f32();
+        self.release = settings.runtime.envelope_release_f32();
     }
 
     pub fn push_target(&mut self, target: f32) {

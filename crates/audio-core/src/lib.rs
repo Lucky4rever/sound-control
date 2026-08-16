@@ -2,15 +2,16 @@ pub mod sound_mode;
 pub mod settings;
 pub mod volume_envelope;
 pub mod priority_ducker;
-pub mod constants;
 pub mod activity_tracker;
 pub mod platform;
+pub mod classify_tick;
 
 pub use sound_mode::SoundMode;
-pub use settings::{Settings, AppConfig};
+pub use settings::{Settings, AppConfig, RuntimeSettings};
 pub use priority_ducker::{PriorityDucker, effective_priority};
 pub use volume_envelope::VolumeEnvelope;
 pub use activity_tracker::ActivityTracker;
+pub use classify_tick::classify_tick;
 
 #[cfg(target_os = "windows")]
 pub use platform::windows::AudioController;
@@ -185,40 +186,5 @@ impl AmplitudeBuffer {
         let mean = self.mean();
         let variance = self.buffer.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / self.buffer.len() as f32;
         variance.sqrt()
-    }
-}
-
-pub fn classify_tick(amp_buffer: &AmplitudeBuffer) -> SoundType {
-    let mean_amp = amp_buffer.mean();
-
-    if mean_amp < 0.003 {
-        return SoundType::None;
-    }
-
-    if amp_buffer.len() < 3 {
-        return SoundType::None;
-    }
-
-    let corr = amp_buffer.correlation();
-    let std_amp = amp_buffer.std();
-
-    if std_amp < constants::NOISE_STD_THRESHOLD && mean_amp > 0.003 {
-        return SoundType::Noise;
-    }
-
-    if mean_amp < 0.01 && std_amp < 0.003 {
-        return SoundType::None;
-    }
-
-    if corr > 0.5 {
-        SoundType::Music
-    } else if corr < 0.25 {
-        SoundType::Voice
-    } else {
-        if std_amp < mean_amp * 0.25 {
-            SoundType::Music
-        } else {
-            SoundType::Voice
-        }
     }
 }

@@ -157,11 +157,8 @@ impl AudioController {
         _amp_histories: &mut HashMap<u32, AmplitudeBuffer>,
         _type_buffers: &mut HashMap<u32, SoundTypeBuffer>,
         _activity_tracker: &mut ActivityTracker,
+        _settings: &Settings,
     ) -> Vec<AppSession> {
-        // macOS не має публічного API для per-app audio sessions.
-        // Реалізація потребує приватного AudioServerPlugIn або
-        // стороннього аудіо-драйвера (на кшталт Soundflower).
-        // Повертаємо порожній список — UI покаже тільки системний слайдер.
         vec![]
     }
 

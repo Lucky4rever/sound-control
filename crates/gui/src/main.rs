@@ -65,12 +65,12 @@ fn get_assets_dir() -> std::path::PathBuf {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let assets_dir = get_assets_dir();
     let icon_path = assets_dir.join("icon.png");
-    let model_path = assets_dir.join("model.onnx");
+    let model_path = assets_dir.join("YamNet.onnx");
 
     let _tray = SystemTray::init(&icon_path)?;
     let ui = AppWindow::new()?;
 
-    let _classifier = AudioClassifier::new(model_path.to_str().unwrap())?;
+    let classifier = AudioClassifier::new(model_path.to_str().unwrap())?;
 
     let state = Rc::new(AppState {
         settings: RefCell::new(Settings::load()),
@@ -148,6 +148,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let st_settings = state.clone();
+    ui.on_settings_changed(move |settings| {
+        let mut s = st_settings.settings.borrow_mut();
+        s.runtime.ducking_ratio = settings.ducking_ratio;
+        s.runtime.recovery_ms = settings.recovery_ms;
+        s.runtime.active_peak_threshold = settings.active_peak_threshold;
+        s.runtime.envelope_attack = settings.envelope_attack;
+        s.runtime.envelope_release = settings.envelope_release;
+        s.runtime.gain_coefficient = settings.gain_coefficient;
+        s.runtime.inactivity_timeout_ms = settings.inactivity_timeout_ms;
+        s.runtime.noise_std_threshold = settings.noise_std_threshold;
+        s.mark_dirty();
+    });
+
     ui.show()?;
 
     #[cfg(target_os = "windows")]
@@ -165,6 +179,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         });
+
+        let settings = state.settings.borrow();
+        let rt = settings.runtime.clone();
+        ui.set_runtime_settings(RuntimeSettings {
+            ducking_ratio: rt.ducking_ratio,
+            recovery_ms: rt.recovery_ms,
+            active_peak_threshold: rt.active_peak_threshold,
+            envelope_attack: rt.envelope_attack,
+            envelope_release: rt.envelope_release,
+            gain_coefficient: rt.gain_coefficient,
+            inactivity_timeout_ms: rt.inactivity_timeout_ms,
+            noise_std_threshold: rt.noise_std_threshold,
+        });
     }
 
     ui.window().set_position(slint::PhysicalPosition::new(-1000, -1000));
@@ -179,7 +206,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut type_buffers: HashMap<u32, SoundTypeBuffer> = HashMap::new();
     let mut priority_ducker = PriorityDucker::new();
     
-    let mut activity_tracker = audio_core::ActivityTracker::new();
+    let mut activity_tracker = audio_core::ActivityTracker::new(&state.settings.borrow());
 
     let ui_timer = ui.as_weak();
     let st_timer = state.clone();
@@ -195,11 +222,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // 2. Отримуємо сирі сесії
+            let settings_ref = st_timer.settings.borrow();
             let mut sessions = AudioController::get_app_sessions(
                 &mut amp_histories,
                 &mut type_buffers,
                 &mut activity_tracker,
+                &*settings_ref,
             );
+            drop(settings_ref);
+
+            let classification = classifier.get_result();
 
             // 3. Застосовуємо збережені налаштування + фіксуємо оригінальні гучності
             {
@@ -264,10 +296,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     pid: s.pid as i32,
                     peak_level: s.peak_level,
                     sound_type: s.sound_type.as_str().into(),
+                    secondary_sound_type: if s.sound_mode == SoundMode::Auto {
+                        classification.secondary.as_str().into()
+                    } else {
+                        "".into()
+                    },
                     sound_mode: s.sound_mode.as_str().into(),
                     priority: audio_core::priority_ducker::effective_priority(s.sound_mode, s.sound_type),
                 };
                 if i < app_model.row_count() {
+                    println!("sound_type: {}. secondary_sound_type: {}", s.sound_type.as_str(), classification.secondary.as_str());
                     app_model.set_row_data(i, item);
                 } else {
                     app_model.push(item);
@@ -285,7 +323,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // 9. Трей
+            // 9. Оновлення тайм-ауту активності
+
+            activity_tracker.update_timeout(&st_timer.settings.borrow());
+
+            // 10. Трей
             if let Ok(event) = TrayIconEvent::receiver().try_recv() {
                 if event.click_type == tray_icon::ClickType::Left {
                     if !is_visible {

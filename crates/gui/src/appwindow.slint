@@ -1,4 +1,4 @@
-import { Button, Slider, ScrollView, ComboBox } from "std-widgets.slint";
+import { Button, Slider, ScrollView, ComboBox, TabWidget } from "std-widgets.slint";
 
 export struct AppVolume {
     name: string,
@@ -6,162 +6,367 @@ export struct AppVolume {
     pid: int,
     peak_level: int,
     sound_type: string,
+    secondary_sound_type: string,
     sound_mode: string,
     priority: int,
 }
 
+export struct RuntimeSettings {
+    ducking-ratio: int,
+    recovery-ms: int,
+    active-peak-threshold: int,
+    envelope-attack: int,
+    envelope-release: int,
+    gain-coefficient: int,
+    inactivity-timeout-ms: int,
+    noise-std-threshold: int,
+}
+
 export component AppWindow inherits Window {
     in-out property <int> volume: 50;
-    in-out property <[AppVolume]> app_volumes: [];
+    in-out property <[AppVolume]> app-volumes: [];
+    in-out property <RuntimeSettings> runtime-settings: {
+        ducking-ratio: 20,
+        recovery-ms: 1000,
+        active-peak-threshold: 3,
+        envelope-attack: 60,
+        envelope-release: 15,
+        gain-coefficient: 25,
+        inactivity-timeout-ms: 3000,
+        noise-std-threshold: 5,
+    };
 
-    callback volume_changed(int);
-    callback volume_step(int);
-    callback app_volume_changed(int, int);
-    callback app_mode_changed(int, int);
+    callback volume-changed(int);
+    callback volume-step(int);
+    callback app-volume-changed(int, int);
+    callback app-mode-changed(int, int);
+    callback settings-changed(RuntimeSettings);
 
     no-frame: true;
     always-on-top: true;
     background: #1e1e24;
 
     width: 360px;
-    height: 440px;
+    height: 480px;
 
-    VerticalLayout {
-        padding: 16px;
-        spacing: 12px;
+    TabWidget {
+        Tab {
+            title: "Мікшер";
 
-        Text {
-            text: "System Volume: " + root.volume + "%";
-            horizontal-alignment: center;
-            font-size: 14px;
-            color: #ffffff;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: center;
-
-            Button {
-                text: "-";
-                width: 30px;
-                clicked => { root.volume_step(-5); }
-            }
-
-            Slider {
-                width: 180px;
-                minimum: 0;
-                maximum: 100;
-                value: root.volume;
-                changed(val) => { root.volume_changed(floor(val)); }
-            }
-
-            Button {
-                text: "+";
-                width: 30px;
-                clicked => { root.volume_step(5); }
-            }
-        }
-
-        Rectangle {
-            height: 1px;
-            background: #3a3a44;
-        }
-
-        Text {
-            text: "Application Mixer";
-            horizontal-alignment: center;
-            font-size: 13px;
-            color: #a0a0b0;
-        }
-
-        ScrollView {
-            height: 260px;
             VerticalLayout {
-                x: 0;
-                width: parent.width;
-                spacing: 6px;
-                for app in root.app_volumes: Rectangle {
-                    height: 84px;
-                    background: app.sound_mode == "voice" ? #2a352a :
-                                app.sound_mode == "other" ? #15151a :
-                                #2a2a35;
-                    border-radius: 6px;
-                    border-width: app.sound_mode == "voice" ? 1px : 0px;
-                    border-color: #33cc66;
+                padding: 16px;
+                spacing: 12px;
 
+                Text {
+                    text: "Гучність системи: " + root.volume + "%";
+                    horizontal-alignment: center;
+                    font-size: 14px;
+                    color: #ffffff;
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: center;
+
+                    Button {
+                        text: "-";
+                        width: 30px;
+                        clicked => { root.volume-step(-5); }
+                    }
+
+                    Slider {
+                        width: 180px;
+                        minimum: 0;
+                        maximum: 100;
+                        value: root.volume;
+                        changed(val) => { root.volume-changed(floor(val)); }
+                    }
+
+                    Button {
+                        text: "+";
+                        width: 30px;
+                        clicked => { root.volume-step(5); }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: #3a3a44;
+                }
+
+                Text {
+                    text: "Мікшер додатків";
+                    horizontal-alignment: center;
+                    font-size: 13px;
+                    color: #a0a0b0;
+                }
+
+                ScrollView {
+                    height: 280px;
                     VerticalLayout {
-                        padding: 8px;
-                        spacing: 4px;
+                        x: 0;
+                        width: parent.width;
+                        spacing: 6px;
+                        for app in root.app-volumes: Rectangle {
+                            height: 84px;
+                            background: app.sound-mode == "voice" ? #2a352a :
+                                        app.sound-mode == "other" ? #15151a :
+                                        #2a2a35;
+                            border-radius: 6px;
+                            border-width: app.sound-mode == "voice" ? 1px : 0px;
+                            border-color: #33cc66;
 
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: stretch;
+                            VerticalLayout {
+                                padding: 8px;
+                                spacing: 4px;
 
-                            Text {
-                                text: app.name;
-                                color: #ffffff;
-                                font-size: 12px;
-                                vertical-alignment: center;
-                                width: 80px;
-                                overflow: TextOverflow.elide;
-                            }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: stretch;
 
-                            ComboBox {
-                                width: 110px;
-                                model: ["auto", "voice", "music", "other"];
-                                current-index: app.sound_mode == "auto" ? 0 :
-                                             app.sound_mode == "voice" ? 1 :
-                                             app.sound_mode == "music" ? 2 : 3;
-                                selected(value) => {
-                                    root.app_mode_changed(app.pid, value == "auto" ? 0 : value == "voice" ? 1 : value == "music" ? 2 : 3);
+                                    Text {
+                                        text: app.name;
+                                        color: #ffffff;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        width: 80px;
+                                        overflow: TextOverflow.elide;
+                                    }
+
+                                    ComboBox {
+                                        width: 70px;
+                                        model: ["auto", "voice", "music", "other"];
+                                        current-index: app.sound-mode == "auto" ? 0 :
+                                                     app.sound-mode == "voice" ? 1 :
+                                                     app.sound-mode == "music" ? 2 : 3;
+                                        selected(value) => {
+                                            root.app-mode-changed(app.pid, value == "auto" ? 0 : value == "voice" ? 1 : value == "music" ? 2 : 3);
+                                        }
+                                    }
+
+                                    Slider {
+                                        minimum: 0;
+                                        maximum: 100;
+                                        value: app.volume;
+                                        enabled: app.sound-mode != "other";
+                                        changed(val) => { root.app-volume-changed(app.pid, floor(val)); }
+                                    }
+                                }
+
+                                Rectangle {
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: #1a1a22;
+
+                                    Rectangle {
+                                        x: 0;
+                                        width: app.peak-level * 1px;
+                                        height: 4px;
+                                        border-radius: 2px;
+                                        background: app.peak-level > 80 ? #ff5555 :
+                                                    app.peak-level > 50 ? #ffaa33 : #33cc66;
+                                    }
+                                }
+
+                                Text {
+                                    text: (app.sound_type == "voice" ? "🎤 voice" :
+                                        app.sound_type == "music" ? "🎵 music" :
+                                        app.sound_type == "noise" ? "💨 noise" : "🔇 none")
+                                        + (app.secondary_sound_type != "" ? " → " + app.secondary_sound_type : "")
+                                        + " | P:" + app.priority;
+                                    color: app.sound_type == "voice" ? #33cc66 :
+                                        app.sound_type == "music" ? #ffaa33 :
+                                        app.sound_type == "noise" ? #888888 : #666666;
+                                    font-size: 10px;
                                 }
                             }
-
-                            Slider {
-                                minimum: 0;
-                                maximum: 100;
-                                value: app.volume;
-                                enabled: app.sound_mode != "other";
-                                changed(val) => { root.app_volume_changed(app.pid, floor(val)); }
-                            }
-                        }
-
-                        Rectangle {
-                            height: 4px;
-                            border-radius: 2px;
-                            background: #1a1a22;
-
-                            Rectangle {
-                                x: 0;
-                                width: app.peak_level * 1px;
-                                height: 4px;
-                                border-radius: 2px;
-                                background: app.peak_level > 80 ? #ff5555 :
-                                            app.peak_level > 50 ? #ffaa33 : #33cc66;
-                            }
-                        }
-
-                        Text {
-                            text: (app.sound_type == "voice" ? "🎤 voice" :
-                                   app.sound_type == "music" ? "🎵 music" :
-                                   app.sound_type == "noise" ? "💨 noise" : "🔇 none")
-                                  + " | P:" + app.priority;
-                            color: app.sound_type == "voice" ? #33cc66 :
-                                   app.sound_type == "music" ? #ffaa33 :
-                                   app.sound_type == "noise" ? #888888 : #666666;
-                            font-size: 10px;
                         }
                     }
+                }
+
+                Text {
+                    text: "© 2026 Sound Control. Усі права захищено.";
+                    horizontal-alignment: center;
+                    font-size: 9px;
+                    color: #555560;
                 }
             }
         }
 
-        // --- Підпис про захист від копірайту ---
-        Text {
-            text: "© 2026 Sound Control. All rights reserved.";
-            horizontal-alignment: center;
-            font-size: 9px;
-            color: #555560;
+        Tab {
+            title: "Налаштування";
+
+            ScrollView {
+                height: parent.height;
+
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 16px;
+
+                    Text {
+                        text: "Параметри ducking";
+                        font-size: 14px;
+                        color: #ffffff;
+                        horizontal-alignment: center;
+                    }
+
+                    // Ducking ratio
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Ducking %"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 0;
+                            maximum: 100;
+                            value: root.runtime-settings.ducking-ratio;
+                            changed(val) => {
+                                root.runtime-settings.ducking-ratio = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.ducking-ratio + "%"; color: #ffffff; font-size: 12px; width: 40px; horizontal-alignment: right; }
+                    }
+
+                    // Recovery time
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Recovery"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 100;
+                            maximum: 5000;
+                            step: 100;
+                            value: root.runtime-settings.recovery-ms;
+                            changed(val) => {
+                                root.runtime-settings.recovery-ms = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.recovery-ms + "ms"; color: #ffffff; font-size: 12px; width: 50px; horizontal-alignment: right; }
+                    }
+
+                    // Active peak threshold
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Peak threshold"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 0;
+                            maximum: 20;
+                            value: root.runtime-settings.active-peak-threshold;
+                            changed(val) => {
+                                root.runtime-settings.active-peak-threshold = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.active-peak-threshold; color: #ffffff; font-size: 12px; width: 40px; horizontal-alignment: right; }
+                    }
+
+                    Rectangle { height: 1px; background: #3a3a44; }
+
+                    Text {
+                        text: "Параметри envelope";
+                        font-size: 14px;
+                        color: #ffffff;
+                        horizontal-alignment: center;
+                    }
+
+                    // Attack
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Attack"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 1;
+                            maximum: 100;
+                            value: root.runtime-settings.envelope-attack;
+                            changed(val) => {
+                                root.runtime-settings.envelope-attack = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.envelope-attack; color: #ffffff; font-size: 12px; width: 40px; horizontal-alignment: right; }
+                    }
+
+                    // Release
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Release"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 1;
+                            maximum: 100;
+                            value: root.runtime-settings.envelope-release;
+                            changed(val) => {
+                                root.runtime-settings.envelope-release = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.envelope-release; color: #ffffff; font-size: 12px; width: 40px; horizontal-alignment: right; }
+                    }
+
+                    Rectangle { height: 1px; background: #3a3a44; }
+
+                    Text {
+                        text: "Параметри класифікації";
+                        font-size: 14px;
+                        color: #ffffff;
+                        horizontal-alignment: center;
+                    }
+
+                    // Gain coefficient
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Gain coeff"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 0;
+                            maximum: 100;
+                            value: root.runtime-settings.gain-coefficient;
+                            changed(val) => {
+                                root.runtime-settings.gain-coefficient = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.gain-coefficient; color: #ffffff; font-size: 12px; width: 40px; horizontal-alignment: right; }
+                    }
+
+                    // Inactivity timeout
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Inactivity"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 1000;
+                            maximum: 10000;
+                            step: 500;
+                            value: root.runtime-settings.inactivity-timeout-ms;
+                            changed(val) => {
+                                root.runtime-settings.inactivity-timeout-ms = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.inactivity-timeout-ms + "ms"; color: #ffffff; font-size: 12px; width: 55px; horizontal-alignment: right; }
+                    }
+
+                    // Noise threshold
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: stretch;
+                        Text { text: "Noise threshold"; color: #a0a0b0; font-size: 12px; width: 120px; vertical-alignment: center; }
+                        Slider {
+                            minimum: 1;
+                            maximum: 50;
+                            value: root.runtime-settings.noise-std-threshold;
+                            changed(val) => {
+                                root.runtime-settings.noise-std-threshold = floor(val);
+                                root.settings-changed(root.runtime-settings);
+                            }
+                        }
+                        Text { text: root.runtime-settings.noise-std-threshold; color: #ffffff; font-size: 12px; width: 40px; horizontal-alignment: right; }
+                    }
+                }
+            }
         }
     }
 }

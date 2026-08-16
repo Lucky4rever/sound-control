@@ -17,7 +17,7 @@ use windows::core::Interface;
 use std::collections::HashMap;
 use crate::{
     AppSession, SoundType, SoundMode, AmplitudeBuffer, SoundTypeBuffer,
-    ActivityTracker, classify_tick, constants,
+    ActivityTracker, classify_tick, Settings,
 };
 
 pub struct AudioController;
@@ -93,6 +93,7 @@ impl AudioController {
         amp_histories: &mut HashMap<u32, AmplitudeBuffer>,
         type_buffers: &mut HashMap<u32, SoundTypeBuffer>,
         activity_tracker: &mut ActivityTracker,
+        settings: &Settings,
     ) -> Vec<AppSession> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -170,14 +171,14 @@ impl AudioController {
 
                     let peak_percent = (peak * 100.0).round() as i32;
 
-                    if !activity_tracker.is_active(pid, peak_percent, constants::ACTIVE_PEAK_THRESHOLD) {
+                    if !activity_tracker.is_active(pid, peak_percent, settings.runtime.active_peak_threshold_i32()) {
                         continue;
                     }
 
                     let amp_buf = amp_histories.entry(pid).or_insert_with(|| AmplitudeBuffer::new(5));
                     amp_buf.push(peak);
 
-                    let tick_type = classify_tick(amp_buf);
+                    let tick_type = classify_tick(amp_buf, settings);
 
                     let type_buf = type_buffers.entry(pid).or_insert_with(|| SoundTypeBuffer::new(crate::PERIOD_MS, crate::TICK_MS));
                     type_buf.push(tick_type);
